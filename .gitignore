@@ -1,0 +1,18 @@
+# 数据
+data/
+
+# 断点文件 — 仅提交推理必需的模型权重
+checkpoints/*
+!checkpoints/checkpoint.pth
+!checkpoints/best_model.pth
+!checkpoints/config.json
+
+# TensorBoard 日志
+runs/
+
+# 结果输出
+results/
+
+# Python
+__pycache__/
+*.pyc

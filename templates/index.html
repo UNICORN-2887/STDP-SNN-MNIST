@@ -1,0 +1,351 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>STDP SNN MNIST 实时验证</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: 'Segoe UI', sans-serif; background: #0d1117; color: #c9d1d9; min-height:100vh; }
+  .header { background: #161b22; padding: 12px 24px; border-bottom: 1px solid #30363d;
+            display: flex; justify-content: space-between; align-items: center; }
+  .header h1 { font-size: 20px; color: #58a6ff; }
+  .header .subtitle { font-size: 12px; color: #8b949e; }
+  .container { max-width: 1200px; margin: 0 auto; padding: 16px; display: grid;
+               grid-template-columns: 320px 1fr; grid-gap: 16px; }
+
+  .panel { background: #161b22; border: 1px solid #30363d; border-radius: 8px; padding: 16px; }
+  .panel-title { font-size: 14px; font-weight: 600; color: #58a6ff; margin-bottom: 10px;
+                 border-bottom: 1px solid #30363d; padding-bottom: 6px; }
+  .img-main { text-align: center; margin: 10px 0; }
+  .img-main img { border: 2px solid #30363d; border-radius: 4px; image-rendering: pixelated; }
+
+  .result-row { display: flex; justify-content: space-around; text-align: center; margin: 10px 0; }
+  .result-item { padding: 6px 12px; border-radius: 6px; background: #21262d; min-width: 60px; }
+  .result-item .label { font-size: 10px; color: #8b949e; text-transform: uppercase; }
+  .result-item .value { font-size: 22px; font-weight: 700; }
+  .correct { color: #3fb950; } .wrong { color: #f85149; } .undef { color: #d2991d; }
+
+  .stats-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 10px; }
+  .stat-card { background: #21262d; border-radius: 6px; padding: 8px 12px; text-align: center; }
+  .stat-card .num { font-size: 24px; font-weight: 700; color: #58a6ff; }
+  .stat-card .lbl { font-size: 10px; color: #8b949e; }
+
+  .fmap-grid { display: grid; grid-template-columns: repeat(8, 1fr); gap: 2px; margin-top: 8px; }
+  .fmap-grid img { width: 100%; border: 1px solid #30363d; border-radius: 2px; image-rendering: pixelated; }
+
+  .trend-container { position: relative; height: 100px; margin-top: 10px; }
+  #trendCanvas { width: 100%; height: 100%; border-radius: 4px; background: #0d1117; }
+
+  .upload-area { border: 2px dashed #30363d; border-radius: 8px; padding: 20px; text-align: center;
+                 margin-top: 10px; cursor: pointer; transition: border-color .2s; }
+  .upload-area:hover { border-color: #58a6ff; }
+  .upload-area.dragover { border-color: #3fb950; background: #1a2a1a; }
+  #uploadPreview { max-width: 140px; max-height: 140px; margin: 8px auto; display: none;
+                   border-radius: 4px; image-rendering: pixelated; }
+
+  .btn { padding: 8px 16px; border-radius: 6px; border: 1px solid #30363d; cursor: pointer;
+         font-size: 13px; background: #21262d; color: #c9d1d9; transition: .15s; }
+  .btn:hover { background: #30363d; }
+  .btn-primary { background: #238636; border-color: #238636; color: #fff; }
+  .btn-primary:hover { background: #2ea043; }
+  .btn-danger { background: #da3633; border-color: #da3633; color: #fff; }
+  .btn-group { display: flex; gap: 8px; margin-top: 8px; flex-wrap: wrap; }
+
+  .progress-bar { height: 6px; background: #21262d; border-radius: 3px; margin-top: 8px; overflow: hidden; }
+  .progress-fill { height: 100%; background: #58a6ff; border-radius: 3px; transition: width .3s; }
+
+  .speed { font-size: 11px; color: #8b949e; margin-top: 4px; text-align: center; }
+  .footer { text-align: center; padding: 16px; color: #484f58; font-size: 11px; }
+
+  @media (max-width: 800px) { .container { grid-template-columns: 1fr; } }
+</style>
+</head>
+<body>
+
+<div class="header">
+  <div>
+    <h1>⚡ STDP SNN · MNIST 实时验证</h1>
+    <div class="subtitle">无监督 STDP 卷积层 + MLP 分类器 · 32 滤波器 · 11 类 (含 undefined)</div>
+  </div>
+  <div class="btn-group">
+    <button class="btn btn-primary" id="btnStart" onclick="startValidation()">▶ 开始</button>
+    <button class="btn" id="btnPause" onclick="pauseValidation()" disabled>⏸ 暂停</button>
+    <button class="btn btn-danger" onclick="resetValidation()">↺ 重置</button>
+    <input type="number" id="speedInput" value="1" min="1" max="50" style="width:60px;background:#21262d;color:#c9d1d9;border:1px solid #30363d;border-radius:6px;padding:6px;text-align:center;" title="每批样本数">
+    <span style="font-size:11px;color:#8b949e;line-height:34px;">张/次</span>
+  </div>
+</div>
+
+<div class="container">
+
+  <!-- 左栏 -->
+  <div>
+    <div class="panel">
+      <div class="panel-title">📷 当前图像</div>
+      <div class="img-main" id="imageArea">
+        <div style="width:140px;height:140px;background:#21262d;margin:0 auto;border-radius:4px;display:flex;align-items:center;justify-content:center;color:#484f58;">等待开始...</div>
+      </div>
+      <div class="result-row">
+        <div class="result-item"><div class="label">真实</div><div class="value" id="trueLabel" style="color:#8b949e;">-</div></div>
+        <div class="result-item"><div class="label">预测</div><div class="value" id="predLabel">-</div></div>
+        <div class="result-item"><div class="label">置信度</div><div class="value" id="confidence" style="font-size:16px;color:#8b949e;">-</div></div>
+        <div class="result-item"><div class="label">结果</div><div class="value" id="resultEmoji" style="font-size:28px;">-</div></div>
+      </div>
+      <div class="progress-bar"><div class="progress-fill" id="progressFill" style="width:0%"></div></div>
+      <div class="speed" id="progressText">0 / 10000</div>
+    </div>
+
+    <div class="panel">
+      <div class="panel-title">📊 实时统计</div>
+      <div class="stats-grid">
+        <div class="stat-card"><div class="num" id="statAcc">-</div><div class="lbl">准确率 (10类)</div></div>
+        <div class="stat-card"><div class="num" id="statTested">0</div><div class="lbl">已测试</div></div>
+        <div class="stat-card"><div class="num" id="statCorrect">0</div><div class="lbl">正确</div></div>
+        <div class="stat-card"><div class="num" id="statUndef" style="color:#d2991d;">0</div><div class="lbl">标记 Undefined</div></div>
+      </div>
+      <div class="panel-title" style="margin-top:10px;">📈 近 50 次趋势</div>
+      <div class="trend-container"><canvas id="trendCanvas"></canvas></div>
+      <div style="display:flex;gap:16px;margin-top:6px;font-size:11px;">
+        <span>🟢 正确</span><span>🔴 错误</span><span>🟡 Undefined</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- 右栏 -->
+  <div>
+    <div class="panel">
+      <div class="panel-title">🔬 32 个滤波器特征图 (28×28 发放率)</div>
+      <div class="fmap-grid" id="fmapGrid">
+        <div style="grid-column:1/-1;text-align:center;color:#484f58;padding:40px;">等待开始...</div>
+      </div>
+    </div>
+
+    <div class="panel">
+      <div class="panel-title">📤 上传图片测试</div>
+      <div class="upload-area" id="uploadArea" onclick="document.getElementById('fileInput').click()">
+        <div>🖼 点击选择图片 或拖拽到此处</div>
+        <div style="font-size:11px;color:#8b949e;margin-top:4px;">自动缩放至 28×28 灰度图</div>
+        <img id="uploadPreview" alt="预览">
+      </div>
+      <input type="file" id="fileInput" accept="image/*" style="display:none" onchange="handleUpload(this)">
+      <div id="uploadResult" style="margin-top:8px;text-align:center;font-size:14px;"></div>
+      <div id="debugPreview" style="text-align:center;margin-top:12px;display:none;background:#0d1117;border:2px solid #d2991d;border-radius:8px;padding:10px;">
+        <div style="font-size:11px;color:#d2991d;margin-bottom:6px;">⚠ 预处理后送入模型的 28×28 图像</div>
+        <img id="debugImg" style="border:2px solid #30363d;border-radius:4px;image-rendering:pixelated;width:200px;height:200px;">
+        <div style="font-size:10px;color:#8b949e;margin-top:4px;">如果这张图看起来不像数字，说明预处理有问题</div>
+      </div>
+      <div class="btn-group" style="justify-content:center;">
+        <button class="btn btn-primary" onclick="document.getElementById('fileInput').click()">📁 选择文件</button>
+      </div>
+    </div>
+  </div>
+
+</div>
+
+<div class="footer">STDP-SNN MNIST · 无监督特征提取 + MLP 分类 · Powered by SpikingJelly & PyTorch</div>
+
+<script>
+// ── 全局状态 ────────────────────────────────────────────
+let running = false;
+let timer = null;
+const TOTAL = 10000;
+
+// ── 趋势图 Canvas ────────────────────────────────────────
+const trendCanvas = document.getElementById('trendCanvas');
+const trendCtx = trendCanvas.getContext('2d');
+function drawTrend(data) {
+  const W = trendCanvas.parentElement.clientWidth;
+  const H = 100;
+  trendCanvas.width = W; trendCanvas.height = H;
+  trendCtx.clearRect(0, 0, W, H);
+
+  // 背景
+  trendCtx.fillStyle = '#0d1117'; trendCtx.fillRect(0, 0, W, H);
+  // 中线
+  trendCtx.strokeStyle = '#30363d'; trendCtx.lineWidth = 1;
+  trendCtx.setLineDash([3, 6]);
+  trendCtx.beginPath(); trendCtx.moveTo(0, H/2); trendCtx.lineTo(W, H/2); trendCtx.stroke();
+  trendCtx.setLineDash([]);
+
+  const n = data.length;
+  if (n === 0) return;
+  const barW = Math.max(2, W / 50 - 1);
+  const gap = Math.max(0, W / 50 - barW);
+
+  data.forEach((d, i) => {
+    const x = W - (n - i) * (barW + gap);
+    const y = d.correct ? H * 0.2 : H * 0.8;
+    trendCtx.fillStyle = d.pred === 10 ? '#d2991d' : (d.correct ? '#3fb950' : '#f85149');
+    trendCtx.fillRect(x, d.correct ? y : y - 8, barW, d.correct ? H * 0.3 : 8);
+  });
+}
+
+// ── API 调用 ─────────────────────────────────────────────
+let batchSize = 1;
+async function fetchNext() {
+  // 支持批量处理
+  for (let i = 0; i < batchSize; i++) {
+    if (!running) break;
+    try {
+      const resp = await fetch('/api/next');
+      const data = await resp.json();
+      if (data.done) { pauseValidation(); updateStats(); return; }
+      updateUI(data);
+    } catch(e) { console.error(e); }
+  }
+  if (running) timer = setTimeout(fetchNext, 300);
+}
+
+async function updateStats() {
+  try {
+    const resp = await fetch('/api/stats');
+    const data = await resp.json();
+    document.getElementById('statTested').textContent = data.total_tested;
+    document.getElementById('statCorrect').textContent = data.correct;
+    document.getElementById('statUndef').textContent = data.undefined_count;
+    document.getElementById('statAcc').textContent = (data.avg_accuracy * 100).toFixed(1) + '%';
+    document.getElementById('progressFill').style.width = (data.progress / data.total * 100) + '%';
+    document.getElementById('progressText').textContent = `${data.progress} / ${data.total}`;
+  } catch(e) {}
+}
+
+function updateUI(data) {
+  // 图像
+  document.getElementById('imageArea').innerHTML = `<img src="data:image/png;base64,${data.image_b64}" width="140" height="140">`;
+  // 标签
+  document.getElementById('trueLabel').textContent = data.true_label;
+  document.getElementById('trueLabel').style.color = '#8b949e';
+
+  const predEl = document.getElementById('predLabel');
+  predEl.textContent = data.pred_label;
+  predEl.className = 'value';
+  if (data.is_undefined) predEl.classList.add('undef');
+  else if (data.is_correct) predEl.classList.add('correct');
+  else predEl.classList.add('wrong');
+
+  document.getElementById('confidence').textContent = data.confidence;
+
+  const emoji = document.getElementById('resultEmoji');
+  emoji.textContent = data.is_undefined ? '⚠️' : (data.is_correct ? '✅' : '❌');
+  emoji.style.color = data.is_undefined ? '#d2991d' : (data.is_correct ? '#3fb950' : '#f85149');
+
+  // 统计
+  document.getElementById('statTested').textContent = data.total_tested;
+  document.getElementById('statCorrect').textContent = data.correct;
+  document.getElementById('statUndef').textContent = data.undefined_count;
+  document.getElementById('statAcc').textContent = (data.avg_accuracy * 100).toFixed(1) + '%';
+  document.getElementById('progressFill').style.width = (data.progress / data.total * 100) + '%';
+  document.getElementById('progressText').textContent = `${data.progress} / ${data.total}`;
+
+  // 特征图
+  let fmapHTML = '';
+  data.feature_maps.forEach(row => {
+    row.forEach(b64 => {
+      fmapHTML += `<img src="data:image/png;base64,${b64}">`;
+    });
+  });
+  document.getElementById('fmapGrid').innerHTML = fmapHTML;
+
+  // 趋势图
+  drawTrend(data.recent_50);
+}
+
+// ── 控制 ─────────────────────────────────────────────────
+function startValidation() {
+  if (running) return;
+  running = true;
+  batchSize = parseInt(document.getElementById('speedInput').value) || 1;
+  document.getElementById('btnStart').disabled = true;
+  document.getElementById('btnPause').disabled = false;
+  document.getElementById('speedInput').disabled = true;
+  fetchNext();
+}
+
+function pauseValidation() {
+  running = false;
+  if (timer) { clearTimeout(timer); timer = null; }
+  document.getElementById('btnStart').disabled = false;
+  document.getElementById('btnPause').disabled = true;
+  document.getElementById('speedInput').disabled = false;
+  updateStats();
+}
+
+async function resetValidation() {
+  pauseValidation();
+  await fetch('/api/reset');
+  document.getElementById('imageArea').innerHTML = '<div style="width:140px;height:140px;background:#21262d;margin:0 auto;border-radius:4px;display:flex;align-items:center;justify-content:center;color:#484f58;">已重置</div>';
+  document.getElementById('fmapGrid').innerHTML = '<div style="grid-column:1/-1;text-align:center;color:#484f58;padding:40px;">已重置</div>';
+  document.getElementById('trueLabel').textContent = '-';
+  document.getElementById('predLabel').textContent = '-';
+  document.getElementById('predLabel').className = 'value';
+  document.getElementById('confidence').textContent = '-';
+  document.getElementById('resultEmoji').textContent = '-';
+  document.getElementById('statTested').textContent = '0';
+  document.getElementById('statCorrect').textContent = '0';
+  document.getElementById('statUndef').textContent = '0';
+  document.getElementById('statAcc').textContent = '-';
+  document.getElementById('progressFill').style.width = '0%';
+  document.getElementById('progressText').textContent = '0 / 10000';
+  const W = trendCanvas.parentElement.clientWidth;
+  trendCtx.clearRect(0, 0, W, 100);
+}
+
+// ── 上传处理 ─────────────────────────────────────────────
+function handleUpload(input) {
+  const file = input.files[0];
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = function(e) {
+    const preview = document.getElementById('uploadPreview');
+    preview.src = e.target.result;
+    preview.style.display = 'block';
+    // 上传
+    const formData = new FormData();
+    formData.append('image', file);
+    document.getElementById('uploadResult').innerHTML = '<span style="color:#8b949e;">预测中...</span>';
+    fetch('/api/upload', { method: 'POST', body: formData })
+      .then(r => r.json())
+      .then(data => {
+        if (data.error) {
+          document.getElementById('uploadResult').innerHTML = `<span style="color:#f85149;">${data.error}</span>`;
+        } else {
+          const color = data.is_undefined ? '#d2991d' : '#3fb950';
+          document.getElementById('uploadResult').innerHTML = `
+            <span style="font-size:28px;font-weight:700;color:${color}">${data.prediction}</span>
+            <span style="font-size:12px;color:#8b949e;margin-left:8px;">置信度: ${data.confidence}</span>
+          `;
+          if (data.debug_image) {
+            document.getElementById('debugImg').src = data.debug_image;
+            document.getElementById('debugPreview').style.display = 'block';
+          }
+        }
+      })
+      .catch(err => {
+        document.getElementById('uploadResult').innerHTML = `<span style="color:#f85149;">请求失败</span>`;
+      });
+  };
+  reader.readAsDataURL(file);
+}
+
+// 拖拽支持
+const uploadArea = document.getElementById('uploadArea');
+uploadArea.addEventListener('dragover', e => { e.preventDefault(); uploadArea.classList.add('dragover'); });
+uploadArea.addEventListener('dragleave', () => uploadArea.classList.remove('dragover'));
+uploadArea.addEventListener('drop', e => {
+  e.preventDefault(); uploadArea.classList.remove('dragover');
+  const file = e.dataTransfer.files[0];
+  if (file) {
+    document.getElementById('fileInput').files = e.dataTransfer.files;
+    handleUpload(document.getElementById('fileInput'));
+  }
+});
+
+// ── 键盘快捷键 ───────────────────────────────────────────
+document.addEventListener('keydown', e => {
+  if (e.key === ' ') { e.preventDefault(); running ? pauseValidation() : startValidation(); }
+  if (e.key === 'r' && e.ctrlKey) { e.preventDefault(); resetValidation(); }
+});
+</script>
+</body>
+</html>
